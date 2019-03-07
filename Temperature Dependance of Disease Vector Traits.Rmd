@@ -1,0 +1,457 @@
+---
+title: "Temperature Dependance of Disease Vector Traits"
+output:
+  html_notebook:
+    number_sections: yes
+    toc: yes
+    toc_float: yes
+  pdf_document:
+    toc: yes
+  html_document:
+    df_print: paged
+    toc: yes
+---
+There are three main objectives to this project: the collection and homogenisation of separate datasets, the analysis of the structure and quality of the unified dataset and an analysis of the variation in thermal response between traits, genus and species.  
+
+```{r message=FALSE, warning=FALSE}
+library(ggplot2)
+# library(plyr)
+library(polynom)
+library(AICcmodavg)
+library(gridExtra)
+
+setwd("C:\\Users\\smytmc\\Desktop\\Own work\\Final year project work\\Code")
+
+data <- read.csv('collected_data (mod8, analysis).csv') # raw data
+```
+
+# Polynomial Regressions for Traits Data
+Creates scatter plots of all different types of traits and then runs 1st, 2nd and 3rd order polynomial regressions through the data.
+
+## Polynomial Regression Plots
+Test Plot
+```{r}
+count <- 2  
+	count_sub <- subset(data, data$DataSeriesID == count)
+	ggplot(count_sub, aes(x = AmbientTemp, y = TraitValueSI)) + 
+	  geom_point() +
+		ylim(0.75*min(count_sub$TraitValueSI), 1.25*max(count_sub$TraitValueSI)) +
+		theme(plot.title = element_text(size = rel(0.5))) +
+		xlab("Temperature (°C)") +
+		ylab(paste(count_sub$Trait, "(", count_sub$TraitUnitSI, ")", sep="")) +
+		ggtitle(count_sub$TraitDef) + 
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ x, colour = "red") +
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ poly(x, 2, raw = TRUE), colour = "green") +
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ poly(x, 3, raw = TRUE), colour = "blue")
+```
+
+Plots all and saves results
+```{r message=FALSE, warning=TRUE}
+setwd("./Reg_plots")
+for(count in unique(data$DataSeriesID)){
+# for(count in seq(1,10)){
+	# count <- 1  # set count manually and run within for loop to test individual plots
+	count_sub <- subset(data, data$DataSeriesID == count)
+	png(paste("Plot", count, "regressions.png"), width = 2000, height =2000, res = 300)
+	a <- ggplot(count_sub, aes(x = AmbientTemp, y = TraitValueSI))
+	a <- a + geom_point() +
+		ylim(0.75*min(count_sub$TraitValueSI), 1.25*max(count_sub$TraitValueSI)) +
+		theme(plot.title = element_text(size = rel(0.5))) +
+		xlab("Temperature (°C)") +
+		ylab(paste(count_sub$Trait, "(", count_sub$TraitUnitSI, ")", sep="")) +
+		ggtitle(count_sub$TraitDef) + 
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ x, colour = "red") +
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ poly(x, 2, raw = TRUE), colour = "green") +
+		stat_smooth(method = "lm", se = TRUE, fill = NA, formula = y ~ poly(x, 3, raw = TRUE), colour = "blue")
+	plot(a)
+	dev.off()	
+}
+setwd("..")
+```
+
+## Polynomial Regression Model Creation and selection
+For each trait a 1st, 2nd and 3rd order polynomial regression is run. The best model for each trait is selected based on the smallest AICc (Akaike information criterion, corrected for small sample size).
+
+For each set of trait measurments the key information like the minimum, maximum and description is collected in the results table.  
+
+Information about the best model is also extracted, the intercept points with the x axis signify the points at which trait activity reaches zero and hence is the minimum and maximum operating temperature for the trait. And the highest activity inflection point is the trait's optimal temperature. 
+
+```{r message=FALSE, warning=FALSE}
+InverseSets <- c(54, 59, 60, 61, 72, seq(76, 86), 114, 116, 117)  # add the dataseriesID for data that has inverse relationship e.g. mortality
+
+Results <- data.frame() # initlialise results data frame
+for(count in unique(data$DataSeriesID)){
+	# count <- 75  # set count manually and run within for loop to test individual plots
+	count_sub <- subset(data, data$DataSeriesID == count)
+
+	reg1 <- lm(count_sub$TraitValueSI ~ count_sub$AmbientTemp)
+	reg2 <- lm(count_sub$TraitValueSI ~ poly(count_sub$AmbientTemp, 2, raw = TRUE))
+	reg3 <- lm(count_sub$TraitValueSI ~ poly(count_sub$AmbientTemp, 3, raw = TRUE))
+	models <- list(reg1, reg2, reg3)
+	ModAICc <- c(AICc(reg1), AICc(reg2), AICc(reg3))  # evaluates AIC and stores as vectors in ModAIC
+	minAICc <- which(ModAICc == min(ModAICc))  # min(ModAIC2)[1] (?) finds the location of the minimum value of AIC in ModAIC, e.g. number 1, 2 or 3
+	BestModel <- models[[minAICc[1]]]  # selects model based on location dictated by minAIC
+	Results[count, "Trait"] <- count_sub$Trait[1]
+	Results[count, "Trait Definition"] <- count_sub$TraitDef[1]
+	Results[count, "Poly Order"] <- minAICc[1] # gives the order of the polynomial 
+	f <- summary(BestModel)$fstatistic
+	Results[count, "p-value for F-stat"] <- pf(f[1], f[2], f[3], lower.tail = FALSE) # calculate f-statistic p-value
+	Results[count, "F-statistic"] <- f[1] # f-statistic
+	ifelse(is.infinite(ModAICc[minAICc[1]]), Results[count, "AICc"] <- "NegInf", Results[count, "AICc"] <- ModAICc[minAICc[1]])
+	Results[count, "No. Data Points"] <- length(count_sub$TraitValueSI)
+	Results[count, "No. Unique Temperatures"] <- length(unique(count_sub$AmbientTemp))
+	Results[count, "R squared"] <- summary(BestModel)$r.squared
+	Results[count, "Adj R squared"] <- summary(BestModel)$adj.r.squared
+	Results[count, "Vector Genus"] <- count_sub$VectorGenus[1]
+	Results[count, "Vector Species"] <- count_sub$VectorSpecies[1]
+	Results[count, "Min Measured Temp"] <- min(count_sub$AmbientTemp)
+	Results[count, "Max Measured Temp"] <- max(count_sub$AmbientTemp)
+	Results[count, "Range Measured Temp"] <- max(count_sub$AmbientTemp) - min(count_sub$AmbientTemp)
+	
+	PolyMod <- polynomial(coef(BestModel))
+	modSta <- summary(PolyMod)$stationaryPoints
+	if (count %in% InverseSets){
+		# for multiple values takes mean, finds the corresponding temperatures whose trait value is the maximum
+		Results[count, "Optimal Measured Temp"] <- mean(count_sub$AmbientTemp[which(count_sub$TraitValueSI == min(count_sub$TraitValueSI))]) 
+		if(length(modSta) == 0){
+			Results[count, "Optimal Estimated Temp"] <- NA
+		} else if (is.infinite(modSta) | is.complex(modSta)){
+			Results[count, "Optimal Estimated Temp"] <- NA
+		} else {
+			modPre <- predict(PolyMod, modSta)
+			LocMinPre <- which(modPre == min(modPre))
+			minSta <- modSta[[LocMinPre]]
+			Results[count, "Optimal Estimated Temp"] <- minSta
+		}
+	} else {
+		Results[count, "Optimal Measured Temp"] <- mean(count_sub$AmbientTemp[which(count_sub$TraitValueSI == max(count_sub$TraitValueSI))]) 
+		if(length(modSta) == 0){
+			Results[count, "Optimal Estimated Temp"] <- NA
+		} else if (is.infinite(modSta) | is.complex(modSta)){
+			Results[count, "Optimal Estimated Temp"] <- NA
+		} else {
+			modPre <- predict(PolyMod, modSta)
+			LocMaxPre <- which(modPre == max(modPre))
+			maxSta <- modSta[[LocMaxPre]]
+			Results[count, "Optimal Estimated Temp"] <- maxSta
+		}
+	} 
+
+	PolyZeroPre <- summary(PolyMod)$zeros
+	if(length(PolyZeroPre) < 2){
+		Results[count, "Min Estimated Temp"] <- NA
+		Results[count, "Max Estimated Temp"] <- NA
+	} else if (is.infinite(PolyZeroPre) | is.complex(PolyZeroPre)){
+		Results[count, "Min Estimated Temp"] <- NA
+		Results[count, "Max Estimated Temp"] <- NA
+	} else {
+		Results[count, "Min Estimated Temp"] <- min(PolyZeroPre)
+		Results[count, "Max Estimated Temp"] <- max(PolyZeroPre)
+	}
+	# PolyMax <- which(RangeMin <= PolyMaxPre & PolyMaxPre <= RangeMax) # remove outside range
+	# PolyMax <- subset(PolyMaxPre, RangeMin <= PolyMaxPre & PolyMaxPre <= RangeMax)
+	# if(length(PolyMaxPre) == 0 | is.infinite(PolyMaxPre) | is.complex(PolyMaxPre)){
+	# 	Results[count, "Optimal Estimated Temp"] <- NA
+	# } else {
+	# 	Results[count, "Optimal Estimated Temp"] <- max(PolyMaxPre)
+	# }
+}
+write.csv(Results, "Results.csv")
+head(Results, 10)
+```
+
+# Exploring Temperature Response of Four Broad Traits
+The individual traits are grouped into four sets of broader traits, as there is a lack of data for inidividual traits. For example rate of larvae development and chance of survival is grouped into the braoder fertility category.  
+
+Loading results and spliting results into three different datasets.
+```{r}
+results <- read.csv('Results2.csv') # load results of analysis
+
+sig_results <- subset(results, p.value.for.F.stat <= 0.05)  # only significant results
+sig_mos_results <- subset(sig_results, Vector.Genus != "Glossina")  # significant mosquito results (i.e. non-fly)
+mos_results <- subset(results, Vector.Genus != "Glossina")  # only mosquito results 
+```
+
+## Density Plots of Optimal Measured Temperature for Four Broad Traits
+Histograms and density plots are then created for each broad trait to indicate optimal temperature of seperate traits in the broad trait. Giving an idea of the range of optimal temperatures for each broad trait.
+```{r}
+result_set <- results
+for(trait in unique(result_set$Broad.Trait)){
+	res_sub <- subset(result_set, Broad.Trait == trait)
+
+	plot <- ggplot(res_sub, aes(x = Optimal.Measured.Temp)) 
+	plot <- plot + geom_histogram(binwidth = 1, colour = "White", fill = "Black") +  # geom_histogram(aes(y =..density..))
+			ggtitle(paste("Histogram of", trait)) + 
+			xlim(0, 45)
+
+	Dplot <- ggplot(res_sub, aes(x = Optimal.Measured.Temp))
+	Dplot <- Dplot + geom_density() + 
+	ggtitle(paste("Density plot of", trait)) + 
+	xlim(0, 45)
+
+	assign(paste("H_", trait, sep=""), plot)
+	assign(paste("D_", trait, sep=""), Dplot)
+}
+# pdf("All Res Traits Optimal Measured.pdf")
+grid.arrange(H_Fertility, H_Development, H_Survival, H_Transmission)
+grid.arrange(D_Fertility, D_Development, D_Survival, D_Transmission)
+```
+
+## Density Plots of Measured Min, Max and Optimal Temperature for Four Broad Traits
+Additional density plots but with the minimum and maximum temperatures added in. The temperatures are based on the measured temperature from experiment results.
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Trait Measured.pdf")
+result_set <- results
+count <- 1
+alphabet <- c("(A)", "(B)", "(C)", "(D)")
+for(trait in c("Fertility", "Development", "Survival", "Transmission")){
+	res_sub <- subset(result_set, Broad.Trait == trait)
+	res_plot <- stack(data.frame(res_sub$Min.Measured.Temp, res_sub$Optimal.Measured.Temp, res_sub$Max.Measured.Temp))
+	leg_title <- "Measured\nTemperature"
+	leg_names <- c("Minimum", "Optimal", "Maximum")
+	leg_breaks <- c("res_sub.Min.Measured.Temp", "res_sub.Optimal.Measured.Temp", "res_sub.Max.Measured.Temp")
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.3) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", trait, "trait")) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85), plot.title = element_text(size = rel(0.75))) +
+			xlab("Temperature")
+	assign(paste("Mul_", trait, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_Fertility, Mul_Development, Mul_Survival, Mul_Transmission)
+```
+### MANOVA of Measured Trait
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+res_set <- results
+y <- cbind(res_set$Min.Measured.Temp, res_set$Max.Measured.Temp, res_set$Optimal.Measured.Temp)
+maov2 <- manova(y ~ Broad.Trait, data = res_set)
+summary(maov2)
+```
+
+## Density Plots of Estimated Min, Max and Optimal Temperature for Four Broad Traits
+Density plots for the minimum, maximum and optimal temperature for the broad traits, in this case temperatures are derived from the best model for each set of traits data.
+
+It only uses the models that are significant, i.e. the model is deemed to be an accurate reflection of the underlying pattern in the data.
+
+The lack of significant results, mean that there is a lack of data for the density plots, hence it it not complete.
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Trait Estimates.pdf")
+result_set <- sig_results  # results, sig_results, mos_results, sig_mos_results
+count <- 1
+alphabet <- c("(A)", "(B)", "(C)", "(D)")
+for(trait in c("Fertility", "Development", "Survival", "Transmission")){
+	res_sub <- subset(result_set, Broad.Trait == trait)
+	res_plot <- stack(data.frame(res_sub$Min.Estimated.Temp, res_sub$Optimal.Estimated.Temp, res_sub$Max.Estimated.Temp))
+	leg_title <- "Estimated\nTemperature"
+	leg_names <- c("Minimum", "Optimal", "Maximum")
+	leg_breaks <- c("res_sub.Min.Estimated.Temp", "res_sub.Optimal.Estimated.Temp", "res_sub.Max.Estimated.Temp")
+
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.3) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", trait, "trait")) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85), plot.title = element_text(size = rel(0.75))) +
+			xlab("Temperature")
+	assign(paste("Mul_", trait, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_Fertility, Mul_Development, Mul_Survival, Mul_Transmission)
+```
+### MANOVA of Estimated Trait
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+res_set <- results
+y <- cbind(res_set$Min.Estimated.Temp, res_set$Max.Estimated.Temp, res_set$Optimal.Estimated.Temp)
+maov2 <- manova(y ~ Broad.Trait, data = res_set)
+summary(maov2)
+```
+
+# Exploring Temperature Response of Four Genera of Vectors
+
+## Density Plots of Measureed Min, Max and Optimal Temperature for For Types of Vectors
+Aedes, Anopheles and Culex are three different genera of mosquitos. Whereas Glossina is a fly genus. The aim of this is to see if different genera of vectors have different ranges in operating temperature.
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Genus Measured.pdf")
+result_set <- results
+count <- 1
+alphabet <- c("(A)", "(B)", "(C)", "(D)")
+for(genus in c("Aedes", "Glossina", "Anopheles", "Culex")){
+	res_sub <- subset(result_set, Vector.Genus == genus)
+	res_plot <- stack(data.frame(res_sub$Min.Measured.Temp, res_sub$Optimal.Measured.Temp, res_sub$Max.Measured.Temp))
+	leg_title <- "Measured\nTemperature"
+	leg_names <- c("Minimum", "Optimum", "Maximum")
+	leg_breaks <- c("res_sub.Min.Measured.Temp", "res_sub.Optimal.Measured.Temp", "res_sub.Max.Measured.Temp")
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.4) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", genus, "genus")) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85), plot.title = element_text(size = rel(0.75))) +
+			xlab("Temperature")
+	assign(paste("Mul_", genus, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_Aedes, Mul_Glossina, Mul_Anopheles, Mul_Culex)
+```
+### MANOVA of Measured Genea
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+res_set <- results
+y <- cbind(res_set$Min.Measured.Temp, res_set$Max.Measured.Temp, res_set$Optimal.Measured.Temp)
+maov3 <- manova(y ~ Vector.Genus, data = res_set)
+summary(maov3)
+```
+
+## Density Plots of Estimated Min, Max and Optimal Temperature for Four Types of Vectors
+This uses the temperatures derived from the best model for each set of traits data, rather than their measured values. It only uses the models that are significant, i.e. the model is deemed to be an accurate reflection of the underlying pattern in the data. *Note: that there are no significant models for the Anopheles and Culux genera.*
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Genus Estimated.pdf")
+result_set <- sig_results
+count <- 1
+alphabet <- c("(A)", "(B)", "(C)", "(D)")
+for(genus in c("Aedes", "Glossina", "Anopheles", "Culex")){
+	res_sub <- subset(result_set, Vector.Genus == genus)
+	res_plot <- stack(data.frame(res_sub$Min.Estimated.Temp, res_sub$Optimal.Estimated.Temp, res_sub$Max.Estimated.Temp))
+	leg_title <- "Estimated\nTemperature"
+	leg_names <- c("Minimum", "Optimal", "Maximum")
+	leg_breaks <- c("res_sub.Min.Estimated.Temp", "res_sub.Optimal.Estimated.Temp", "res_sub.Max.Estimated.Temp")
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.4) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", genus, "genus")) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85), plot.title = element_text(size = rel(0.75))) +
+			xlab("Temperature")
+	assign(paste("Mul_", genus, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_Aedes, Mul_Glossina)
+```
+### MANOVA of Estimated Genea
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+res_set <- results
+y <- cbind(res_set$Min.Estimated.Temp, res_set$Max.Estimated.Temp, res_set$Optimal.Estimated.Temp)
+maov3 <- manova(y ~ Vector.Genus, data = res_set)
+summary(maov3)
+```
+# Exploring Temperature Response of Different Species Within Genus
+
+## Density Plots of Measured Min, Max and Optimal Temperature for Four Aedes Species
+Drilling down into the Aedes genus, we are now looking at the differences in temperature response between the four different species.
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Species Measured.pdf")
+result_set <- results
+count <- 1
+alphabet <- c("(A)", "(C)", "(B)", "(D)")
+for(species in c("aegypti", "morsitans", "albopictus", "pallidipes")){
+	res_sub <- subset(result_set, Vector.Species == species)
+	res_plot <- stack(data.frame(res_sub$Min.Measured.Temp, res_sub$Optimal.Measured.Temp, res_sub$Max.Measured.Temp))
+	leg_title <- "Measured\nTemperature"
+	leg_names <- c("Minimum", "Optimum", "Maximum")
+	leg_breaks <- c("res_sub.Min.Measured.Temp", "res_sub.Optimal.Measured.Temp", "res_sub.Max.Measured.Temp")
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.4) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", res_sub$Vector.Genus, species)) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85)) +
+			xlab("Temperature")
+	assign(paste("Mul_", species, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_aegypti, Mul_morsitans, Mul_albopictus, Mul_pallidipes)
+```
+### MANOVA of Aedes Measured
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+res_set <- results 
+res_set <- subset(results, Vector.Genus == "Aedes")
+res_set_sig <- subset(res_set, p.value.for.F.stat < 0.05)
+
+y1 <- cbind(res_set$Min.Measured.Temp, res_set$Max.Measured.Temp, res_set$Optimal.Measured.Temp)
+maov1 <- manova(y1 ~ Vector.Species, data = res_set)
+
+summary(maov1)
+```
+
+## Density Plots of Estimated Min, Max and Optimal Temperature for Four Aedes Species
+This uses the temperatures derived from the best model for each set of traits data, rather than their measured values. It only uses the models that are significant, i.e. the model is deemed to be an accurate reflection of the underlying pattern in the data.
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Species Estimated.pdf")
+result_set <- sig_results
+count <- 1
+alphabet <- c("(A)", "(C)", "(B)", "(D)")
+for(species in c("aegypti", "morsitans", "albopictus", "pallidipes")){
+	res_sub <- subset(result_set, Vector.Species == species)
+	res_plot <- stack(data.frame(res_sub$Min.Estimated.Temp, res_sub$Optimal.Estimated.Temp, res_sub$Max.Estimated.Temp))
+	leg_title <- "Estimated\nTemperature"
+	leg_names <- c("Minimum", "Optimal", "Maximum")
+	leg_breaks <- c("res_sub.Min.Estimated.Temp", "res_sub.Optimal.Estimated.Temp", "res_sub.Max.Estimated.Temp")
+	plot <- ggplot(res_plot, aes(x = values)) 
+	plot <- plot + geom_density(aes(group = ind, fill = ind), alpha = 0.4) +
+			xlim(0, 50)	+
+			ggtitle(paste(alphabet[count], "Thermal response density plots for", res_sub$Vector.Genus, species)) + 
+			scale_fill_manual(values = c("#8A0829", "#088A68", "#0489B1"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+			theme(legend.position = c(0.95, 0.85)) +
+			xlab("Temperature")
+	assign(paste("Mul_", species, sep = ""), plot)
+	count = count + 1
+}
+grid.arrange(Mul_aegypti, Mul_morsitans, Mul_albopictus, Mul_pallidipes)
+```
+### MANOVA Test of Aedes Estimated
+MANOVA test are performed to see if there is a statistically significant difference in the three key measures of temperature between the different areas.
+```{r}
+#manova species for Aedes
+res_set <- results 
+res_set <- subset(results, Vector.Genus == "Aedes")
+res_set_sig <- subset(res_set, p.value.for.F.stat < 0.05)
+
+y2 <- cbind(res_set_sig$Min.Estimated.Temp, res_set_sig$Max.Estimated.Temp, res_set_sig$Optimal.Estimated.Temp)
+maov2 <- manova(y2 ~ Vector.Species, data = res_set_sig)
+
+summary(maov2)
+```
+
+# Analysis of Data and Results Quality 
+```{r}
+mean(subset(results$No..Data.Points, results$No..Data.Points < 31))
+mean(results$No..Unique.Temperatures)
+mean(results$Range.Measured.Temp)
+mean(results$Min.Measured.Temp)
+mean(results$Max.Measured.Temp)
+```
+plots used to analyse data quality 
+```{r, fig.width = 12, fig.height = 9}
+# pdf("Data Quality Plots.pdf")
+plot1 <- ggplot(results, aes(x = No..Data.Points)) 
+plot1 <- plot1 + geom_histogram(binwidth = 2, colour = "White", fill = "#170B3B") +
+		ggtitle(paste("(A) Histogram of the number of \n data points in each data series")) + 
+		xlim(0, 30) +
+		xlab("Number of data points")
+plot2 <- ggplot(results, aes(x = No..Unique.Temperatures)) 
+plot2 <- plot2 + geom_histogram(binwidth = 2, colour = "White", fill = "#170B3B") +
+		ggtitle(paste("(B) Histogram of the number of \n unique temperatures measured per data series")) + 
+		xlab("Unique temperatures measured")
+plot3 <- ggplot(results, aes(x = Range.Measured.Temp)) 
+plot3 <- plot3 + geom_histogram(binwidth = 2, colour = "White", fill = "#170B3B") +
+		ggtitle(paste("(C) Histogram of the range of \n temperatures measured in each data series")) + 
+		xlab("Range of temperatures measured")
+res_sub <- results
+res_plot <- stack(data.frame(res_sub$Min.Measured.Temp, res_sub$Max.Measured.Temp))
+leg_title <- "Measured\nTemperature"
+leg_names <- c("Minimum", "Maximum")
+leg_breaks <- c("res_sub.Min.Measured.Temp", "res_sub.Max.Measured.Temp")
+plot4 <- ggplot(res_plot, aes(x = values)) 
+plot4 <- plot4 + geom_histogram(binwidth = 3, colour = "White", aes(group = ind, fill = ind), alpha = 0.7) +
+		ggtitle(paste("(D) Histogram of the minimum and maximum \n temperature measured for each data series")) + 
+		scale_fill_manual(values = c("#8A0829", "#088A68"), name = leg_title, breaks = leg_breaks, labels = leg_names) +
+		theme(legend.position = c(0.9, 0.85)) +
+		xlab("Temperature")
+grid.arrange(plot1, plot2, plot3, plot4)
+```
